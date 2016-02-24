@@ -41,9 +41,105 @@
 
 // </COPY ME>
 
+NSColor * colorFromSGRColorTable(NSUInteger colorIndex) {
+    static NSArray * colors = nil;
+    if (nil == colors) {
+        colors = @[
+                   [NSColor blackColor],
+                   [NSColor redColor],
+                   [NSColor greenColor],
+                   [NSColor yellowColor],
+                   [NSColor blueColor],
+                   [NSColor magentaColor],
+                   [NSColor cyanColor],
+                   [NSColor whiteColor]
+                   ];
+    }
+
+    if (colorIndex < colors.count) {
+        return colors[colorIndex];
+    }
+
+    return nil;
+}
 
 
 @implementation NSTextStorage (XcodeColors)
+
+void updateAttributesAccordingToSGRParameter(NSMutableDictionary * attributes, NSUInteger parameter) {
+    if (0 == parameter) {
+        [attributes removeAllObjects];
+    }
+    else if (parameter >= 30 && parameter <= 37) {
+        NSColor * color = colorFromSGRColorTable(parameter - 30);
+        [attributes setObject:color forKey:NSForegroundColorAttributeName];
+    }
+    else if (parameter >= 40 && parameter <= 47) {
+        NSColor * color = colorFromSGRColorTable(parameter - 40);
+        [attributes setObject:color forKey:NSBackgroundColorAttributeName];
+    }
+}
+
+void MyApplyANSIColors(NSTextStorage *textStorage, NSRange textStorageRange, NSString *escapeSeq) {
+    if (NSNotFound == [[textStorage string] rangeOfString:escapeSeq options:0 range:textStorageRange].location) {
+        // No escape sequence(s) in the string.
+        return;
+    }
+
+    NSString * affectedString = [[textStorage string] substringWithRange:textStorageRange];
+    NSArray * components = [affectedString componentsSeparatedByString:escapeSeq];
+
+    [textStorage beginEditing];
+
+    NSMutableDictionary * attributes = [NSMutableDictionary new];
+    NSDictionary * clearAttrs =
+        @{NSFontAttributeName : [NSFont systemFontOfSize:0.001],
+          NSForegroundColorAttributeName : [NSColor clearColor]};
+
+
+    NSString* firstComponent = components.firstObject;
+
+    NSUInteger SGRStartLocation = textStorageRange.location + firstComponent.length;
+    NSRange componentRange = NSMakeRange(textStorageRange.location + firstComponent.length + escapeSeq.length, 0);
+
+    for (NSUInteger i=1; i<components.count; ++i) {
+        NSString * component = components[i];
+        componentRange.length = component.length;
+
+        const NSUInteger SGRTerminatorLocation = [component rangeOfString:@"m"].location;
+        if (NSNotFound != SGRTerminatorLocation) {
+            NSArray * SGRParameters = [[component substringToIndex:SGRTerminatorLocation] componentsSeparatedByString:@";"];
+            if (1 == SGRParameters.count &&
+                ([SGRParameters.firstObject isEqualToString:@""] || [SGRParameters.firstObject isEqualToString:@"0"]))
+            {
+                [attributes removeAllObjects];
+            }
+            else {
+                for (NSString * parameter in SGRParameters) {
+                    NSInteger parameterValue = NSNotFound;
+                    if ([[NSScanner scannerWithString:parameter] scanInteger:&parameterValue]) {
+                        updateAttributesAccordingToSGRParameter(attributes, parameterValue);
+                    }
+                }
+            }
+
+            if (SGRTerminatorLocation != component.length - 1) {
+                NSRange rawTextRange = componentRange;
+                rawTextRange.location += SGRTerminatorLocation + 1;
+                rawTextRange.length -= (SGRTerminatorLocation + 1);
+
+                [textStorage addAttributes:attributes range:rawTextRange];
+
+                [textStorage addAttributes:clearAttrs range:NSMakeRange(SGRStartLocation, escapeSeq.length + SGRTerminatorLocation + 1)];
+            }
+        }
+
+        componentRange.location += component.length + escapeSeq.length;
+        SGRStartLocation += component.length + escapeSeq.length;
+    }
+
+    [textStorage endEditing];
+}
 
 void ApplyANSIColors(NSTextStorage *textStorage, NSRange textStorageRange, NSString *escapeSeq)
 {
@@ -289,7 +385,7 @@ void ApplyANSIColors(NSTextStorage *textStorage, NSRange textStorageRange, NSStr
 	char *xcode_colors = getenv(XCODE_COLORS);
 	if (xcode_colors && (strcmp(xcode_colors, "YES") == 0))
 	{
-		ApplyANSIColors(self, aRange, XCODE_COLORS_ESCAPE);
+		MyApplyANSIColors(self, aRange, XCODE_COLORS_ESCAPE);
 	}
 }
 
